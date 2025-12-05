@@ -1,0 +1,7 @@
+{
+  "name": "***fbc 1054 5/12",
+  "description": "Professional construction estimation tool for Freedom Building Construction, supporting multi-language quotes and PDF export.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
