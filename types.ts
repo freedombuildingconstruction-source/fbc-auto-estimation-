@@ -17,6 +17,7 @@ export interface LineItem {
   quantity: number;
   unitPriceEx: number;
   totalPriceInc: number;
+  images?: string[];
 }
 
 export interface PricingItem {

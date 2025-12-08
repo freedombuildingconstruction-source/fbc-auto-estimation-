@@ -1,28 +1,88 @@
 import React from 'react';
 
-interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  label?: string;
-}
-
-export const DarkInput: React.FC<InputProps> = ({ label, className, ...props }) => (
-  <div className="flex flex-col gap-1 w-full">
-    {label && <label className="text-xs text-gray-400 font-medium">{label}</label>}
-    <input
-      className={`bg-navyLight text-white px-3 py-2 rounded border border-transparent focus:border-brandOrange focus:ring-1 focus:ring-brandOrange outline-none transition-all placeholder-gray-500 ${className}`}
-      {...props}
-    />
+// Handwritten circle SVG component to simulate a red marker
+const HandwrittenCircle = () => (
+  <div className="absolute -inset-1.5 z-20 pointer-events-none select-none">
+     <svg 
+       className="w-full h-full overflow-visible" 
+       viewBox="0 0 100 100" 
+       preserveAspectRatio="none"
+     >
+       {/* Rough path mimicking a hand-drawn circle/ellipse */}
+       <path 
+         d="M3,8 Q40,-2 96,6 Q103,50 96,94 Q50,102 4,92 Q-4,50 3,8 M 3,8 L 5,12" 
+         vectorEffect="non-scaling-stroke"
+         stroke="#dc2626" 
+         strokeWidth="4" 
+         fill="none"
+         strokeLinecap="round"
+         strokeLinejoin="round"
+         className="opacity-90 drop-shadow-sm filter"
+       />
+     </svg>
   </div>
 );
 
-export const DarkSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { label?: string }> = ({ label, children, className, ...props }) => (
+interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label?: string;
+  error?: boolean;
+}
+
+export const DarkInput: React.FC<InputProps> = ({ label, className, error, ...props }) => (
   <div className="flex flex-col gap-1 w-full">
-    {label && <label className="text-xs text-gray-400 font-medium">{label}</label>}
-    <select
-      className={`bg-navyLight text-white px-3 py-2 rounded border border-transparent focus:border-brandOrange focus:ring-1 focus:ring-brandOrange outline-none transition-all ${className}`}
-      {...props}
-    >
-      {children}
-    </select>
+    {label && <label className={`text-xs font-medium ${error ? 'text-red-500 font-bold' : 'text-gray-400'}`}>{label}</label>}
+    <div className="relative">
+        <input
+          className={`bg-navyLight text-white px-3 py-2 rounded border outline-none transition-all placeholder-gray-500 w-full relative z-10 ${
+            error 
+              ? 'border-transparent' // Remove standard border, rely on circle
+              : 'border-transparent focus:border-brandOrange focus:ring-1 focus:ring-brandOrange'
+          } ${className}`}
+          {...props}
+        />
+        {error && <HandwrittenCircle />}
+    </div>
+  </div>
+);
+
+export const DarkSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { label?: string, error?: boolean }> = ({ label, children, className, error, ...props }) => (
+  <div className="flex flex-col gap-1 w-full">
+    {label && <label className={`text-xs font-medium ${error ? 'text-red-500 font-bold' : 'text-gray-400'}`}>{label}</label>}
+    <div className="relative">
+        <select
+          className={`bg-navyLight text-white px-3 py-2 rounded border outline-none transition-all w-full relative z-10 ${
+            error 
+              ? 'border-transparent' 
+              : 'border-transparent focus:border-brandOrange focus:ring-1 focus:ring-brandOrange'
+          } ${className}`}
+          {...props}
+        >
+          {children}
+        </select>
+        {error && <HandwrittenCircle />}
+    </div>
+  </div>
+);
+
+interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
+  label?: string;
+  error?: boolean;
+}
+
+export const DarkTextarea: React.FC<TextareaProps> = ({ label, className, error, ...props }) => (
+  <div className="flex flex-col gap-1 w-full">
+    {label && <label className={`text-xs font-medium ${error ? 'text-red-500 font-bold' : 'text-gray-400'}`}>{label}</label>}
+    <div className="relative">
+        <textarea
+          className={`bg-navyLight text-white px-3 py-2 rounded border outline-none transition-all placeholder-gray-500 w-full relative z-10 min-h-[80px] ${
+            error 
+              ? 'border-transparent' 
+              : 'border-transparent focus:border-brandOrange focus:ring-1 focus:ring-brandOrange'
+          } ${className}`}
+          {...props}
+        />
+        {error && <HandwrittenCircle />}
+    </div>
   </div>
 );
 

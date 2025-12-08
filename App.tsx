@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Trash2, Plus, Camera, Send, FileText } from 'lucide-react';
+import { Download, Trash2, Plus, Camera, Send, FileText, Loader2, CheckCircle, Share2, Copy, Mail, X, Drill } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -17,10 +17,33 @@ import {
   Language, 
   CategoryId 
 } from './types';
-import { DarkInput, DarkSelect, OrangeButton, CheckboxGroup } from './components/Shared';
+import { DarkInput, DarkSelect, DarkTextarea, OrangeButton, CheckboxGroup } from './components/Shared';
 
 const REF_NUMBER = `FBC-${new Date().getDate()}${new Date().getMonth() + 1}-${Math.floor(Math.random() * 99)}`;
 const GST_RATE = 0.10;
+
+// Custom Logo Component mimicking the uploaded image
+// Green circle style
+const FBCLogo = () => (
+  <div className="relative w-[72px] h-[72px] rounded-full bg-[#8dc63f] flex items-center justify-center shrink-0 shadow-sm border border-green-600/10">
+    <div className="w-[58px] h-[58px] rounded-full bg-white flex items-center justify-center relative">
+       {/* Letter F */}
+       <span className="font-sans font-normal text-black text-[38px] leading-none absolute left-[15px] top-[11px] select-none">F</span>
+       {/* Drill Icon */}
+       <Drill size={20} className="text-black absolute left-[30px] top-[24px]" strokeWidth={1.5} />
+    </div>
+  </div>
+);
+
+// Helper to process files to base64
+const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = error => reject(error);
+  });
+};
 
 function App() {
   // State
@@ -33,17 +56,34 @@ function App() {
     phone: '',
     email: ''
   });
+  
+  // Validation State
+  const [clientErrors, setClientErrors] = useState({ name: false, email: false });
+  const [formErrors, setFormErrors] = useState<Record<string, boolean>>({});
+
+  // Modal State
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [quoteData, setQuoteData] = useState({ subject: '', body: '' });
+  const [copyStatus, setCopyStatus] = useState(false);
 
   // Local Form States
   const [minorBathForm, setMinorBathForm] = useState({ type: MINOR_BATH_OPTIONS[0].id, qty: 1, scanning: false });
   const [handrailForm, setHandrailForm] = useState({ type: 'wall', location: 'indoor', len: '', qty: 1 });
-  const [rampForm, setRampForm] = useState({ type: 'merbau', len: '', ground: 'concrete' });
+  const [rampForm, setRampForm] = useState({ type: 'merbau', len: '', ground: 'concrete', photos: [] as string[] });
   const [rampRailForm, setRampRailForm] = useState({ len: '', sides: 'one' });
   const [majorBathForm, setMajorBathForm] = useState({ 
     len: '', width: '', height: '', 
     selectedItems: [] as string[]
   });
   const [maintForm, setMaintForm] = useState({ desc: '', duration: '1', inspection: false });
+
+  // Refs
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Clear form errors when tab changes
+  useEffect(() => {
+    setFormErrors({});
+  }, [activeTab]);
 
   // Helper text translator
   const t = (key: string) => TRANSLATIONS[key]?.[lang] || key;
@@ -64,7 +104,12 @@ function App() {
     if (!input) return;
     
     try {
-      const canvas = await html2canvas(input, { scale: 2, backgroundColor: '#ffffff' });
+      // Temporarily hide delete buttons if any in summary (though currently there aren't any for items directly)
+      const canvas = await html2canvas(input, { 
+        scale: 2, 
+        backgroundColor: '#ffffff',
+        useCORS: true // Important for images if they come from external (though here they are base64)
+      });
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -78,34 +123,64 @@ function App() {
     }
   };
 
-  const handleSubmit = () => {
-    if (items.length === 0) {
-      alert("Please add items to the quote first.");
-      return;
+  // Photo Handlers
+  const handlePhotoDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      try {
+        const newPhotos = await Promise.all(
+          (Array.from(e.dataTransfer.files) as File[])
+            .filter(file => file.type.startsWith('image/'))
+            .map(fileToBase64)
+        );
+        setRampForm(prev => ({ ...prev, photos: [...prev.photos, ...newPhotos] }));
+      } catch (err) {
+        console.error("Error reading files", err);
+      }
     }
-    if (!client.name || !client.email) {
-      alert("Please provide Case Manager/Company Name and Email.");
-      return;
-    }
+  };
 
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      try {
+        const newPhotos = await Promise.all(
+          (Array.from(e.target.files) as File[])
+             .filter(file => file.type.startsWith('image/'))
+             .map(fileToBase64)
+        );
+        setRampForm(prev => ({ ...prev, photos: [...prev.photos, ...newPhotos] }));
+      } catch (err) {
+        console.error("Error reading files", err);
+      }
+    }
+    // Reset input so same file can be selected again if needed
+    if (e.target) e.target.value = '';
+  };
+
+  const removePhoto = (index: number) => {
+    setRampForm(prev => ({ ...prev, photos: prev.photos.filter((_, i) => i !== index) }));
+  };
+
+  // Generate the quote content but don't send it yet
+  const prepareQuoteData = () => {
     // Calculate totals for email body
     const subtotal = items.reduce((sum, item) => sum + item.unitPriceEx * item.quantity, 0); 
     const gstTotal = subtotal * GST_RATE;
     const grandTotal = subtotal + gstTotal;
 
     // Construct Email Subject & Body
-    const subject = `New Quotation Request - ${client.name} - ${REF_NUMBER}`;
+    const subject = `Quote Request: ${client.name} (${REF_NUMBER})`;
     
-    let body = `New Quotation Request Received\n\n`;
-    body += `CLIENT DETAILS:\n`;
-    body += `Case Manager & Company: ${client.name}\n`;
-    body += `Email: ${client.email}\n`;
-    body += `Phone: ${client.phone || 'N/A'}\n`;
-    body += `Job Address & Client Name: ${client.address || 'N/A'}\n`;
-    body += `Date: ${new Date().toLocaleDateString()}\n`;
-    body += `Ref: ${REF_NUMBER}\n\n`;
+    let body = `New Quote Request\n\n`;
+    body += `CLIENT: ${client.name}\n`;
+    body += `EMAIL: ${client.email}\n`;
+    body += `PHONE: ${client.phone || 'N/A'}\n`;
+    body += `ADDR: ${client.address || 'N/A'}\n`;
+    body += `REF: ${REF_NUMBER}\n\n`;
     
-    body += `ESTIMATION SUMMARY:\n`;
+    body += `SUMMARY:\n`;
     
     // Group items by category for cleaner email
     const grouped = items.reduce((acc, item) => {
@@ -117,30 +192,77 @@ function App() {
     Object.keys(grouped).forEach(catId => {
        const catDef = CATEGORIES.find(c => c.id === catId);
        const catName = catDef ? catDef.labelEn : catId;
-       body += `\n--- ${catName.toUpperCase()} ---\n`;
+       body += `--- ${catName.toUpperCase()} ---\n`;
        grouped[catId].forEach(item => {
-          body += `- ${item.description}`;
-          if (item.details) body += ` (${item.details})`;
-          body += `\n  Qty: ${item.quantity} | Unit Ex: ${formatCurrency(item.unitPriceEx)} | Total (Inc): ${formatCurrency(item.totalPriceInc)}\n`;
+          body += `* ${item.description}`;
+          if (item.details) body += ` [${item.details}]`;
+          body += `\n  Qty: ${item.quantity} | Total: ${formatCurrency(item.totalPriceInc)}\n`;
+          if (item.images && item.images.length > 0) {
+            body += `  [Attached ${item.images.length} photo(s)]\n`;
+          }
        });
+       body += `\n`;
     });
     
-    body += `\n-----------------------------------\n`;
-    body += `Subtotal (Ex GST): ${formatCurrency(subtotal)}\n`;
-    body += `GST (10%): ${formatCurrency(gstTotal)}\n`;
-    body += `TOTAL ESTIMATE (Inc GST): ${formatCurrency(grandTotal)}\n`;
-    body += `-----------------------------------\n\n`;
-    
-    body += `PHOTOS & VIDEOS:\n`;
-    body += `[ IMPORTANT: Please attach any relevant site photos or videos to this email manually before sending ]\n\n`;
-    
-    body += `Sent via Freedom Building Estimator App`;
+    body += `Total (Inc GST): ${formatCurrency(grandTotal)}\n\n`;
+    body += `[Please attach high-res site photos manually if not included above]`;
 
-    // Alert user about photos since we can't attach them programmatically
-    alert("Your default email client will now open with the quote draft.\n\nIMPORTANT: Please remember to attach any site photos or videos manually to the email before sending.");
+    return { subject, body };
+  };
 
-    // Open default mail client
-    window.location.href = `mailto:dicksonlam@bigpond.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const handleShareClick = () => {
+    if (items.length === 0) {
+      alert("Please add items to the quote first.");
+      return;
+    }
+    
+    const errors = {
+        name: !client.name.trim(),
+        email: !client.email.trim()
+    };
+
+    if (errors.name || errors.email) {
+        setClientErrors(errors);
+        alert("Please provide Case Manager/Company Name and Email (highlighted fields).");
+        return;
+    }
+    setClientErrors({ name: false, email: false });
+
+    const data = prepareQuoteData();
+    setQuoteData(data);
+    setCopyStatus(false);
+    setShowShareModal(true);
+  };
+
+  // Modal Actions
+  const handleOpenGmail = () => {
+    // Gmail web interface often handles longer URLs better, but still has limits
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=freedombuildingconstruction@gmail.com&su=${encodeURIComponent(quoteData.subject)}&body=${encodeURIComponent(quoteData.body)}`;
+    window.open(gmailUrl, '_blank');
+  };
+
+  const handleNativeShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: quoteData.subject,
+          text: quoteData.body,
+        });
+      } catch (err) {
+        console.error("Share failed:", err);
+      }
+    }
+  };
+
+  const handleCopyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(quoteData.body);
+      setCopyStatus(true);
+      setTimeout(() => setCopyStatus(false), 3000);
+    } catch (err) {
+      console.error("Copy failed", err);
+      alert("Failed to copy. Please select text manually.");
+    }
   };
 
   // --- Category Specific Add Handlers ---
@@ -191,7 +313,12 @@ function App() {
 
   const addHandrail = () => {
     const len = parseFloat(handrailForm.len) || 0;
-    if (len <= 0) return;
+    
+    if (len <= 0) {
+        setFormErrors({ ...formErrors, len: true });
+        return;
+    }
+    setFormErrors({});
 
     let rate = 370; // Wall default
     let minLen = 0.5;
@@ -227,7 +354,12 @@ function App() {
 
   const addRamp = () => {
     const len = parseFloat(rampForm.len) || 0;
-    if (len <= 0) return;
+    
+    if (len <= 0) {
+        setFormErrors({ ...formErrors, len: true });
+        return;
+    }
+    setFormErrors({});
 
     const width = 1.3;
     const area = len * width;
@@ -253,19 +385,28 @@ function App() {
       detailsZh: `長度: ${len}米 (${area.toFixed(2)}平方米), 地面: ${groundLabelZh}`,
       quantity: 1,
       unitPriceEx: totalEx,
-      totalPriceInc: totalInc
+      totalPriceInc: totalInc,
+      images: [...rampForm.photos] // Add photos to the item
     });
+
+    // Reset Form
+    setRampForm({ type: 'merbau', len: '', ground: 'concrete', photos: [] });
   };
 
   const addRampRail = () => {
     const len = parseFloat(rampRailForm.len) || 0;
-    if (len <= 0) return;
+    
+    if (len <= 0) {
+        setFormErrors({ ...formErrors, len: true });
+        return;
+    }
 
     // Requirement: only apply for length over 5000mm (5m)
     if (len <= 5) {
       alert("Ramp rails are only applicable for lengths greater than 5000mm (5m).");
       return;
     }
+    setFormErrors({});
 
     const rate = 350;
     const multiplier = rampRailForm.sides === 'both' ? 2 : 1;
@@ -289,6 +430,18 @@ function App() {
   };
 
   const addMajorBath = () => {
+    // Validation
+    const errors: Record<string, boolean> = {};
+    if (!majorBathForm.len || parseFloat(majorBathForm.len) <= 0) errors.len = true;
+    if (!majorBathForm.width || parseFloat(majorBathForm.width) <= 0) errors.width = true;
+    if (!majorBathForm.height || parseFloat(majorBathForm.height) <= 0) errors.height = true;
+
+    if (Object.keys(errors).length > 0) {
+        setFormErrors(errors);
+        return;
+    }
+    setFormErrors({});
+
     // 1. Standard Package
     const stdRate = STANDARD_PACKAGE_RATE;
     const stdRateInc = stdRate * (1 + GST_RATE);
@@ -322,7 +475,11 @@ function App() {
   };
 
   const addMaintenance = () => {
-    if (!maintForm.desc) return;
+    if (!maintForm.desc.trim()) {
+        setFormErrors({ ...formErrors, desc: true });
+        return;
+    }
+    setFormErrors({});
     
     let labourCost = 0;
     const duration = parseFloat(maintForm.duration); 
@@ -378,7 +535,16 @@ function App() {
               <option value="indoor">{t('indoor')}</option>
               <option value="outdoor">{t('outdoor')}</option>
             </DarkSelect>
-            <DarkInput type="number" label={t('lengthM')} value={handrailForm.len} onChange={e => setHandrailForm({...handrailForm, len: e.target.value})} />
+            <DarkInput 
+                type="number" 
+                label={t('lengthM')} 
+                value={handrailForm.len} 
+                onChange={e => {
+                    setHandrailForm({...handrailForm, len: e.target.value});
+                    if (formErrors.len) setFormErrors({...formErrors, len: false});
+                }}
+                error={formErrors.len}
+            />
             <DarkInput type="number" label={t('qty')} value={handrailForm.qty} onChange={e => setHandrailForm({...handrailForm, qty: parseInt(e.target.value) || 1})} min={1} />
             <OrangeButton className="w-full mt-4" onClick={addHandrail}><Plus size={18} /> {t('addItem')}</OrangeButton>
           </div>
@@ -390,22 +556,74 @@ function App() {
               <option value="merbau">Merbau ($792/sqm)</option>
               <option value="composite">Composite ($921/sqm)</option>
             </DarkSelect>
-            <DarkInput type="number" label={t('lengthM')} value={rampForm.len} onChange={e => setRampForm({...rampForm, len: e.target.value})} />
+            <DarkInput 
+                type="number" 
+                label={t('lengthM')} 
+                value={rampForm.len} 
+                onChange={e => {
+                    setRampForm({...rampForm, len: e.target.value});
+                    if (formErrors.len) setFormErrors({...formErrors, len: false});
+                }}
+                error={formErrors.len}
+            />
             <DarkSelect label={t('groundType')} value={rampForm.ground} onChange={e => setRampForm({...rampForm, ground: e.target.value})}>
               <option value="concrete">{t('concrete')}</option>
               <option value="soil">{t('soil')}</option>
             </DarkSelect>
-            <div className="p-4 border border-dashed border-gray-600 rounded flex flex-col items-center justify-center text-gray-400 gap-2 cursor-pointer hover:border-brandOrange hover:text-white transition-colors">
+            
+            {/* Photo Upload Area */}
+            <div 
+              className="p-4 border-2 border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center text-gray-400 gap-2 cursor-pointer hover:border-brandOrange hover:text-white hover:bg-white/5 transition-all"
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              onDrop={handlePhotoDrop}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input 
+                 type="file" 
+                 multiple 
+                 accept="image/*" 
+                 className="hidden" 
+                 ref={fileInputRef} 
+                 onChange={handlePhotoSelect} 
+              />
               <Camera size={24} />
-              <span className="text-sm">{t('uploadPhotos')}</span>
+              <span className="text-sm font-medium">{t('uploadPhotos')}</span>
+              <span className="text-xs text-gray-500">Drag & Drop or Click to browse</span>
             </div>
+            
+            {/* Photo Previews */}
+            {rampForm.photos.length > 0 && (
+               <div className="grid grid-cols-4 gap-2 mt-2 animate-fadeIn">
+                 {rampForm.photos.map((photo, idx) => (
+                   <div key={idx} className="relative group aspect-square">
+                      <img src={photo} className="w-full h-full object-cover rounded border border-gray-600 shadow-sm" alt="Preview" />
+                      <button 
+                          onClick={(e) => { e.stopPropagation(); removePhoto(idx); }}
+                          className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                      >
+                          <X size={12} />
+                      </button>
+                   </div>
+                 ))}
+               </div>
+            )}
+
             <OrangeButton className="w-full mt-4" onClick={addRamp}><Plus size={18} /> {t('addItem')}</OrangeButton>
           </div>
         );
       case 'ramp-rails':
         return (
            <div className="space-y-4 animate-fadeIn">
-            <DarkInput type="number" label={t('lengthM')} value={rampRailForm.len} onChange={e => setRampRailForm({...rampRailForm, len: e.target.value})} />
+            <DarkInput 
+                type="number" 
+                label={t('lengthM')} 
+                value={rampRailForm.len} 
+                onChange={e => {
+                    setRampRailForm({...rampRailForm, len: e.target.value});
+                    if (formErrors.len) setFormErrors({...formErrors, len: false});
+                }}
+                error={formErrors.len}
+            />
             <p className="text-xs text-brandOrange italic -mt-2">Minimum length 5m (5000mm) required</p>
              <div className="flex gap-4">
                <label className="text-white flex items-center gap-2"><input type="radio" checked={rampRailForm.sides === 'one'} onChange={() => setRampRailForm({...rampRailForm, sides: 'one'})} /> {t('oneSide')}</label>
@@ -426,9 +644,36 @@ function App() {
         return (
           <div className="space-y-4 animate-fadeIn">
             <div className="grid grid-cols-3 gap-2">
-              <DarkInput type="number" label={t('lengthMm')} value={majorBathForm.len} onChange={e => setMajorBathForm({...majorBathForm, len: e.target.value})} />
-              <DarkInput type="number" label={t('widthMm')} value={majorBathForm.width} onChange={e => setMajorBathForm({...majorBathForm, width: e.target.value})} />
-              <DarkInput type="number" label={t('ceilingHtMm')} value={majorBathForm.height} onChange={e => setMajorBathForm({...majorBathForm, height: e.target.value})} />
+              <DarkInput 
+                type="number" 
+                label={t('lengthMm')} 
+                value={majorBathForm.len} 
+                onChange={e => {
+                    setMajorBathForm({...majorBathForm, len: e.target.value});
+                    if (formErrors.len) setFormErrors(prev => ({...prev, len: false}));
+                }} 
+                error={formErrors.len}
+              />
+              <DarkInput 
+                type="number" 
+                label={t('widthMm')} 
+                value={majorBathForm.width} 
+                onChange={e => {
+                    setMajorBathForm({...majorBathForm, width: e.target.value});
+                    if (formErrors.width) setFormErrors(prev => ({...prev, width: false}));
+                }} 
+                error={formErrors.width}
+              />
+              <DarkInput 
+                type="number" 
+                label={t('ceilingHtMm')} 
+                value={majorBathForm.height} 
+                onChange={e => {
+                    setMajorBathForm({...majorBathForm, height: e.target.value});
+                    if (formErrors.height) setFormErrors(prev => ({...prev, height: false}));
+                }}
+                error={formErrors.height}
+              />
             </div>
             <div className="bg-navyLight p-3 rounded">
               <label className="text-xs text-gray-400 font-medium mb-2 block">{t('inclusions')}</label>
@@ -455,11 +700,14 @@ function App() {
         return (
           <div className="space-y-4 animate-fadeIn">
             <div className="flex flex-col gap-1 w-full">
-              <label className="text-xs text-gray-400 font-medium">{t('jobDesc')}</label>
-              <textarea 
-                className="bg-navyLight text-white px-3 py-2 rounded border border-transparent focus:border-brandOrange focus:ring-1 focus:ring-brandOrange outline-none transition-all placeholder-gray-500 min-h-[80px]"
+              <DarkTextarea
+                label={t('jobDesc')}
                 value={maintForm.desc}
-                onChange={e => setMaintForm({...maintForm, desc: e.target.value})}
+                onChange={e => {
+                    setMaintForm({...maintForm, desc: e.target.value});
+                    if (formErrors.desc) setFormErrors({...formErrors, desc: false});
+                }}
+                error={formErrors.desc}
               />
             </div>
             <DarkSelect label={t('estDuration')} value={maintForm.duration} onChange={e => setMaintForm({...maintForm, duration: e.target.value})}>
@@ -493,14 +741,16 @@ function App() {
   }, {} as Record<string, LineItem[]>);
 
   return (
-    <div className="min-h-screen bg-gray-100 font-sans text-gray-800">
+    <div className="min-h-screen bg-gray-100 font-sans text-gray-800 relative">
       {/* Header */}
-      <header className="bg-navy text-white p-4 shadow-lg sticky top-0 z-50">
+      <header className="bg-navy text-white p-4 shadow-lg sticky top-0 z-40">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex flex-col">
-            <h1 className="text-xl font-bold flex items-center gap-2">
-              <span className="bg-white text-navy p-1 rounded font-black tracking-tighter">FBC</span>
-              Freedom Building <span className="text-brandOrange">Estimator</span>
+            <h1 className="text-xl font-bold flex items-center gap-3">
+              <FBCLogo />
+              <span className="flex flex-col leading-tight">
+                <span className="text-xl tracking-tight text-white">FBC <span className="text-brandOrange">Estimator</span></span>
+              </span>
             </h1>
           </div>
           <div className="flex items-center gap-4">
@@ -513,7 +763,7 @@ function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <main className="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-0">
         
         {/* Left Column: Controls (45%) */}
         <div className="lg:col-span-5 space-y-6">
@@ -524,17 +774,35 @@ function App() {
               <h2 className="font-bold text-navy">{t('clientDetails')}</h2>
             </div>
             <div className="space-y-3">
-              <DarkInput label={t('clientName')} value={client.name} onChange={e => setClient({...client, name: e.target.value})} placeholder="Manager Name & Company" />
+              <DarkInput 
+                label={t('clientName')} 
+                value={client.name} 
+                onChange={e => {
+                    setClient({...client, name: e.target.value});
+                    if (clientErrors.name) setClientErrors(prev => ({...prev, name: false}));
+                }} 
+                placeholder="Manager Name & Company" 
+                error={clientErrors.name}
+              />
               <DarkInput label={t('address')} value={client.address} onChange={e => setClient({...client, address: e.target.value})} placeholder="Job Address & Client Name" />
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <DarkInput label={t('phone')} value={client.phone} onChange={e => setClient({...client, phone: e.target.value})} placeholder="0400 000 000" />
-                <DarkInput label={t('email')} value={client.email} onChange={e => setClient({...client, email: e.target.value})} placeholder="email@example.com" />
+                <DarkInput 
+                    label={t('email')} 
+                    value={client.email} 
+                    onChange={e => {
+                        setClient({...client, email: e.target.value});
+                        if (clientErrors.email) setClientErrors(prev => ({...prev, email: false}));
+                    }} 
+                    placeholder="email@example.com" 
+                    error={clientErrors.email}
+                />
               </div>
             </div>
           </div>
 
           {/* Configuration */}
-          <div className="bg-white rounded shadow overflow-hidden flex flex-col h-full border-l-4 border-brandOrange">
+          <div className="bg-white rounded shadow overflow-hidden flex flex-col border-l-4 border-brandOrange">
             {/* Tabs */}
             <div className="flex overflow-x-auto bg-navyLight no-scrollbar pb-1">
               {CATEGORIES.map(cat => (
@@ -564,21 +832,24 @@ function App() {
         {/* Right Column: Summary (55%) */}
         <div className="lg:col-span-7 flex flex-col gap-4">
           
-          {/* Summary Actions */}
+          {/* Total Estimation Summary (Moved here - Top of Right Column) */}
           <div className="flex justify-between items-center bg-white p-4 rounded shadow">
              <h2 className="font-bold text-navy">{t('totalSummary')}</h2>
-             <div className="flex gap-2">
-                <button onClick={handleExportPDF} className="text-xs flex items-center gap-1 bg-gray-100 hover:bg-gray-200 text-navy px-3 py-2 rounded font-medium transition-colors">
-                  <Download size={14} /> {t('exportPdf')}
-                </button>
-                {items.length > 0 && (
-                   <button onClick={handleSubmit} className="text-xs flex items-center gap-1 bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded font-medium transition-colors">
+             <div className="flex flex-col items-end gap-1">
+               <div className="flex gap-2">
+                  <button onClick={handleExportPDF} className="text-xs flex items-center gap-1 bg-gray-100 hover:bg-gray-200 text-navy px-3 py-2 rounded font-medium transition-colors">
+                    <Download size={14} /> {t('exportPdf')}
+                  </button>
+                  <button 
+                    onClick={handleShareClick} 
+                    className="text-xs flex items-center gap-1 px-3 py-2 rounded font-medium transition-colors bg-green-100 hover:bg-green-200 text-green-800"
+                  >
                     <Send size={14} /> {t('submitQuote')}
                   </button>
-                )}
+               </div>
              </div>
           </div>
-
+          
           {/* The Actual Quote Paper */}
           <div id="quote-summary" className="bg-white p-8 rounded shadow-lg min-h-[600px] text-sm relative">
             
@@ -590,14 +861,16 @@ function App() {
                 <div className="text-gray-600 text-xs space-y-1">
                    <p><span className="font-bold">{t('contact')}:</span> Dickson Lam</p>
                    <p>Sydney, NSW</p>
-                   <p>dicksonlam@bigpond.com</p>
+                   <p>freedombuildingconstruction@gmail.com</p>
                 </div>
               </div>
               <div className="text-right">
                 <div className="text-xl font-bold text-gray-800 mb-2">{t('estimate')}</div>
-                <div className="text-gray-600 text-xs">
+                <div className="text-gray-600 text-xs space-y-1">
                   <p><span className="font-bold">Ref:</span> {REF_NUMBER}</p>
                   <p><span className="font-bold">Date:</span> {new Date().toLocaleDateString()}</p>
+                  <p><span className="font-bold">Lic No:</span> 270939C</p>
+                  <p><span className="font-bold">ABN:</span> 33 160 818 502</p>
                 </div>
               </div>
             </div>
@@ -638,10 +911,18 @@ function App() {
                           <td className="py-3 pl-2">
                             <div className="font-medium text-gray-800">{lang === 'zh' && item.descriptionZh ? item.descriptionZh : item.description}</div>
                             {item.details && <div className="text-xs text-gray-500 mt-1">{lang === 'zh' && item.detailsZh ? item.detailsZh : item.details}</div>}
+                            {/* Render attached photos for the item */}
+                            {item.images && item.images.length > 0 && (
+                                <div className="flex gap-2 mt-2 flex-wrap">
+                                    {item.images.map((img, i) => (
+                                        <img key={i} src={img} className="h-16 w-16 object-cover rounded border border-gray-200" alt="Item attachment" />
+                                    ))}
+                                </div>
+                            )}
                           </td>
                           <td className="py-3 text-center text-gray-600">{item.quantity}</td>
-                          <td className="py-3 text-right text-gray-600">{formatCurrency(item.unitPriceEx)}</td>
-                          <td className="py-3 text-right font-medium text-gray-800">{formatCurrency(item.totalPriceInc)}</td>
+                          <td className="py-3 text-right text-gray-600 text-xs">{formatCurrency(item.unitPriceEx)}</td>
+                          <td className="py-3 text-right font-medium text-gray-800 text-xs">{formatCurrency(item.totalPriceInc)}</td>
                           <td className="py-3 text-center">
                             <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
                               <Trash2 size={14} />
@@ -683,11 +964,81 @@ function App() {
             {/* Disclaimer */}
             <div className="mt-12 pt-4 border-t border-gray-200 text-xs text-gray-400 text-center">
               <p>This is an estimate. Final quote may vary after site inspection. All work guaranteed to meet Australian Building Standards.</p>
-              <p className="mt-1">Freedom Building Construction | ABN: XX XXX XXX XXX</p>
+              <p className="mt-1">Freedom Building Construction | ABN: 33 160 818 502 | Lic: 270939C</p>
             </div>
           </div>
         </div>
       </main>
+
+      {/* SEND OPTIONS MODAL */}
+      {showShareModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100">
+            <div className="bg-navy p-4 flex justify-between items-center">
+              <h3 className="text-white font-bold text-lg flex items-center gap-2">
+                 <Send size={18} /> Send Quote
+              </h3>
+              <button onClick={() => setShowShareModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600 mb-4">
+                Choose how you would like to send the quote request to <span className="font-bold text-navy">Freedom Building</span>.
+              </p>
+              
+              {/* Option: Gmail Web */}
+              <button onClick={handleOpenGmail} className="w-full flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-brandOrange hover:bg-orange-50 transition-all group">
+                 <div className="flex items-center gap-3">
+                   <div className="bg-red-100 text-red-600 p-2 rounded-full group-hover:bg-brandOrange group-hover:text-white transition-colors">
+                     <Mail size={20} />
+                   </div>
+                   <div className="text-left">
+                     <div className="font-bold text-navy">Gmail</div>
+                     <div className="text-xs text-gray-500">Open in Gmail Web</div>
+                   </div>
+                 </div>
+                 <div className="text-gray-400 group-hover:text-brandOrange">→</div>
+              </button>
+
+              {/* Option 2: Native Share (Mobile) */}
+              {navigator.share && (
+                <button onClick={handleNativeShare} className="w-full flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-brandOrange hover:bg-orange-50 transition-all group">
+                   <div className="flex items-center gap-3">
+                     <div className="bg-purple-100 text-purple-600 p-2 rounded-full group-hover:bg-brandOrange group-hover:text-white transition-colors">
+                       <Share2 size={20} />
+                     </div>
+                     <div className="text-left">
+                       <div className="font-bold text-navy">Share...</div>
+                       <div className="text-xs text-gray-500">WhatsApp, Messages, etc.</div>
+                     </div>
+                   </div>
+                   <div className="text-gray-400 group-hover:text-brandOrange">→</div>
+                </button>
+              )}
+
+              {/* Option 3: Copy to Clipboard */}
+              <button onClick={handleCopyToClipboard} className="w-full flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-brandOrange hover:bg-orange-50 transition-all group">
+                 <div className="flex items-center gap-3">
+                   <div className={`p-2 rounded-full transition-colors ${copyStatus ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-600 group-hover:bg-brandOrange group-hover:text-white'}`}>
+                     {copyStatus ? <CheckCircle size={20} /> : <Copy size={20} />}
+                   </div>
+                   <div className="text-left">
+                     <div className="font-bold text-navy">{copyStatus ? 'Copied!' : 'Copy Text'}</div>
+                     <div className="text-xs text-gray-500">Paste manually into email</div>
+                   </div>
+                 </div>
+                 {!copyStatus && <div className="text-gray-400 group-hover:text-brandOrange">→</div>}
+              </button>
+            </div>
+            
+            <div className="bg-gray-50 p-3 text-center text-xs text-gray-400 border-t">
+               Don't forget to attach site photos to your message!
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
