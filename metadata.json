@@ -1,6 +1,6 @@
 {
-  "name": "***fbc 08/12 emaill funtion and ABN added",
-  "description": "Professional construction estimation tool for Freedom Building Construction, supporting multi-language quotes and PDF export.",
+  "name": "Freedom Building Job Estimator ",
+  "description": "Professional construction estimation tool for Case Manager/ OT, supporting multi-language quotes and PDF export - Freedom Building Construction.",
   "requestFramePermissions": [
     "camera"
   ]

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Trash2, Plus, Camera, Send, FileText, Loader2, CheckCircle, Share2, Copy, Mail, X, Drill } from 'lucide-react';
+import { Download, Trash2, Plus, Camera, Send, FileText, Loader2, CheckCircle, Share2, Copy, Mail, X, Drill, UploadCloud } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -65,6 +65,13 @@ function App() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [quoteData, setQuoteData] = useState({ subject: '', body: '' });
   const [copyStatus, setCopyStatus] = useState(false);
+  
+  // Processing State
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+
+  // Upload State
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
 
   // Local Form States
   const [minorBathForm, setMinorBathForm] = useState({ type: MINOR_BATH_OPTIONS[0].id, qty: 1, scanning: false });
@@ -99,16 +106,15 @@ function App() {
     setItems(items.filter(i => i.id !== id));
   };
 
-  const handleExportPDF = async () => {
+  const generatePdfBlob = async (): Promise<Blob | null> => {
     const input = document.getElementById('quote-summary');
-    if (!input) return;
+    if (!input) return null;
     
     try {
-      // Temporarily hide delete buttons if any in summary (though currently there aren't any for items directly)
       const canvas = await html2canvas(input, { 
         scale: 2, 
         backgroundColor: '#ffffff',
-        useCORS: true // Important for images if they come from external (though here they are base64)
+        useCORS: true 
       });
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -116,28 +122,73 @@ function App() {
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Quote-${REF_NUMBER}.pdf`);
+      return pdf.output('blob');
     } catch (error) {
-      console.error("PDF Export failed", error);
-      alert("Could not generate PDF. Please try again.");
+      console.error("PDF generation failed", error);
+      return null;
     }
   };
 
+  const handleExportPDF = async () => {
+    if (isGeneratingPdf) return;
+    setIsGeneratingPdf(true);
+    
+    const blob = await generatePdfBlob();
+    
+    if (blob) {
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Quote-${REF_NUMBER}.pdf`;
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } else {
+      alert("Could not generate PDF. Please try again.");
+    }
+    
+    setIsGeneratingPdf(false);
+  };
+
   // Photo Handlers
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
   const handlePhotoDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    setIsDragging(false);
     
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       try {
-        const newPhotos = await Promise.all(
-          (Array.from(e.dataTransfer.files) as File[])
-            .filter(file => file.type.startsWith('image/'))
-            .map(fileToBase64)
-        );
+        const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
+        if (files.length === 0) {
+            setUploadFeedback("No image files detected.");
+            setTimeout(() => setUploadFeedback(null), 3000);
+            return;
+        }
+
+        const newPhotos = await Promise.all(files.map(fileToBase64));
         setRampForm(prev => ({ ...prev, photos: [...prev.photos, ...newPhotos] }));
+        setUploadFeedback(`${files.length} photo(s) added successfully!`);
+        setTimeout(() => setUploadFeedback(null), 3000);
       } catch (err) {
         console.error("Error reading files", err);
+        setUploadFeedback("Failed to upload photos.");
+        setTimeout(() => setUploadFeedback(null), 3000);
       }
     }
   };
@@ -145,14 +196,16 @@ function App() {
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       try {
-        const newPhotos = await Promise.all(
-          (Array.from(e.target.files) as File[])
-             .filter(file => file.type.startsWith('image/'))
-             .map(fileToBase64)
-        );
+        const files = Array.from(e.target.files).filter(file => file.type.startsWith('image/'));
+        const newPhotos = await Promise.all(files.map(fileToBase64));
+        
         setRampForm(prev => ({ ...prev, photos: [...prev.photos, ...newPhotos] }));
+        setUploadFeedback(`${files.length} photo(s) added successfully!`);
+        setTimeout(() => setUploadFeedback(null), 3000);
       } catch (err) {
         console.error("Error reading files", err);
+        setUploadFeedback("Failed to upload photos.");
+        setTimeout(() => setUploadFeedback(null), 3000);
       }
     }
     // Reset input so same file can be selected again if needed
@@ -205,8 +258,7 @@ function App() {
     });
     
     body += `Total (Inc GST): ${formatCurrency(grandTotal)}\n\n`;
-    body += `[Please attach high-res site photos manually if not included above]`;
-
+    
     return { subject, body };
   };
 
@@ -235,22 +287,64 @@ function App() {
   };
 
   // Modal Actions
-  const handleOpenGmail = () => {
-    // Gmail web interface often handles longer URLs better, but still has limits
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=freedombuildingconstruction@gmail.com&su=${encodeURIComponent(quoteData.subject)}&body=${encodeURIComponent(quoteData.body)}`;
-    window.open(gmailUrl, '_blank');
+  const handleOpenGmail = async () => {
+    if (isGeneratingPdf) return;
+    setIsGeneratingPdf(true);
+
+    // 1. Generate & Download PDF
+    try {
+        const blob = await generatePdfBlob();
+        if (blob) {
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `Quote-${REF_NUMBER}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+        }
+    } catch (e) {
+        console.error("Error generating PDF for Gmail", e);
+    }
+
+    // 2. Open Gmail & Instruct
+    setTimeout(() => {
+        const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=freedombuildingconstruction@gmail.com&su=${encodeURIComponent(quoteData.subject)}&body=${encodeURIComponent(quoteData.body)}`;
+        window.open(gmailUrl, '_blank');
+        setIsGeneratingPdf(false);
+        alert("The PDF Quote has been downloaded to your device.\n\nPlease attach it manually to the Gmail email.");
+    }, 1000);
   };
 
   const handleNativeShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: quoteData.subject,
-          text: quoteData.body,
-        });
-      } catch (err) {
-        console.error("Share failed:", err);
+    if (!navigator.share) return;
+    if (isGeneratingPdf) return;
+
+    setIsGeneratingPdf(true);
+    
+    try {
+      const blob = await generatePdfBlob();
+      
+      let shareData: any = {
+        title: quoteData.subject,
+        text: quoteData.body,
+      };
+
+      if (blob) {
+        const file = new File([blob], `Quote-${REF_NUMBER}.pdf`, { type: 'application/pdf' });
+        // Check if files are supported
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            shareData.files = [file];
+        }
       }
+
+      await navigator.share(shareData);
+
+    } catch (err) {
+      console.error("Share failed:", err);
+    } finally {
+      setIsGeneratingPdf(false);
     }
   };
 
@@ -571,10 +665,16 @@ function App() {
               <option value="soil">{t('soil')}</option>
             </DarkSelect>
             
-            {/* Photo Upload Area */}
+            {/* Enhanced Photo Upload Area */}
             <div 
-              className="p-4 border-2 border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center text-gray-400 gap-2 cursor-pointer hover:border-brandOrange hover:text-white hover:bg-white/5 transition-all"
-              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              className={`p-6 border-2 border-dashed rounded-lg flex flex-col items-center justify-center gap-3 cursor-pointer transition-all relative overflow-hidden group
+                ${isDragging 
+                    ? 'border-brandOrange bg-brandOrange/10 text-brandOrange' 
+                    : 'border-gray-600 text-gray-400 hover:border-brandOrange hover:text-white hover:bg-white/5'
+                }`}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
               onDrop={handlePhotoDrop}
               onClick={() => fileInputRef.current?.click()}
             >
@@ -586,9 +686,26 @@ function App() {
                  ref={fileInputRef} 
                  onChange={handlePhotoSelect} 
               />
-              <Camera size={24} />
-              <span className="text-sm font-medium">{t('uploadPhotos')}</span>
-              <span className="text-xs text-gray-500">Drag & Drop or Click to browse</span>
+              
+              {/* Icon Animation */}
+              <div className={`transition-transform duration-300 ${isDragging ? 'scale-110' : 'group-hover:scale-110'}`}>
+                {isDragging ? <UploadCloud size={32} /> : <Camera size={32} />}
+              </div>
+
+              <div className="text-center z-10">
+                <span className="text-sm font-bold block">{isDragging ? 'Drop photos here' : t('uploadPhotos')}</span>
+                <span className="text-xs opacity-70 mt-1 block">
+                    {isDragging ? 'Release to upload' : 'Drag & Drop or Click to browse'}
+                </span>
+              </div>
+              
+              {/* Success/Feedback Overlay */}
+              {uploadFeedback && (
+                 <div className="absolute inset-0 bg-green-500/90 flex items-center justify-center text-white font-bold text-sm animate-fadeIn">
+                    <CheckCircle size={18} className="mr-2" />
+                    {uploadFeedback}
+                 </div>
+              )}
             </div>
             
             {/* Photo Previews */}
@@ -837,8 +954,8 @@ function App() {
              <h2 className="font-bold text-navy">{t('totalSummary')}</h2>
              <div className="flex flex-col items-end gap-1">
                <div className="flex gap-2">
-                  <button onClick={handleExportPDF} className="text-xs flex items-center gap-1 bg-gray-100 hover:bg-gray-200 text-navy px-3 py-2 rounded font-medium transition-colors">
-                    <Download size={14} /> {t('exportPdf')}
+                  <button onClick={handleExportPDF} disabled={isGeneratingPdf} className="text-xs flex items-center gap-1 bg-gray-100 hover:bg-gray-200 text-navy px-3 py-2 rounded font-medium transition-colors disabled:opacity-50">
+                    {isGeneratingPdf ? <Loader2 className="animate-spin" size={14} /> : <Download size={14} />} {t('exportPdf')}
                   </button>
                   <button 
                     onClick={handleShareClick} 
@@ -857,8 +974,8 @@ function App() {
             <div className="flex justify-between items-start mb-8 border-b pb-6">
               <div>
                 <h1 className="text-2xl font-bold text-navy tracking-wide">{t('companyName')}</h1>
-                <p className="text-gray-500 font-bold tracking-widest text-xs mb-4">{t('construction')}</p>
-                <div className="text-gray-600 text-xs space-y-1">
+                <div className="text-gray-600 text-xs space-y-1 mt-2">
+                   <p className="font-bold text-navy mb-2">Lic No: 270939C | ABN: 33 160 818 502</p>
                    <p><span className="font-bold">{t('contact')}:</span> Dickson Lam</p>
                    <p>Sydney, NSW</p>
                    <p>freedombuildingconstruction@gmail.com</p>
@@ -869,8 +986,6 @@ function App() {
                 <div className="text-gray-600 text-xs space-y-1">
                   <p><span className="font-bold">Ref:</span> {REF_NUMBER}</p>
                   <p><span className="font-bold">Date:</span> {new Date().toLocaleDateString()}</p>
-                  <p><span className="font-bold">Lic No:</span> 270939C</p>
-                  <p><span className="font-bold">ABN:</span> 33 160 818 502</p>
                 </div>
               </div>
             </div>
@@ -911,11 +1026,11 @@ function App() {
                           <td className="py-3 pl-2">
                             <div className="font-medium text-gray-800">{lang === 'zh' && item.descriptionZh ? item.descriptionZh : item.description}</div>
                             {item.details && <div className="text-xs text-gray-500 mt-1">{lang === 'zh' && item.detailsZh ? item.detailsZh : item.details}</div>}
-                            {/* Render attached photos for the item */}
+                            {/* Render attached photos for the item - Increased size by 2.5x */}
                             {item.images && item.images.length > 0 && (
                                 <div className="flex gap-2 mt-2 flex-wrap">
                                     {item.images.map((img, i) => (
-                                        <img key={i} src={img} className="h-16 w-16 object-cover rounded border border-gray-200" alt="Item attachment" />
+                                        <img key={i} src={img} className="h-40 w-40 object-cover rounded border border-gray-200 shadow-sm" alt="Item attachment" />
                                     ))}
                                 </div>
                             )}
@@ -962,7 +1077,7 @@ function App() {
             </div>
 
             {/* Disclaimer */}
-            <div className="mt-12 pt-4 border-t border-gray-200 text-xs text-gray-400 text-center">
+            <div className="mt-12 pt-4 border-t border-gray-200 text-xs text-brandOrange text-center">
               <p>This is an estimate. Final quote may vary after site inspection. All work guaranteed to meet Australian Building Standards.</p>
               <p className="mt-1">Freedom Building Construction | ABN: 33 160 818 502 | Lic: 270939C</p>
             </div>
@@ -992,11 +1107,11 @@ function App() {
               <button onClick={handleOpenGmail} className="w-full flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-brandOrange hover:bg-orange-50 transition-all group">
                  <div className="flex items-center gap-3">
                    <div className="bg-red-100 text-red-600 p-2 rounded-full group-hover:bg-brandOrange group-hover:text-white transition-colors">
-                     <Mail size={20} />
+                     {isGeneratingPdf ? <Loader2 className="animate-spin" size={20} /> : <Mail size={20} />}
                    </div>
                    <div className="text-left">
-                     <div className="font-bold text-navy">Gmail</div>
-                     <div className="text-xs text-gray-500">Open in Gmail Web</div>
+                     <div className="font-bold text-navy">Gmail (Download & Open)</div>
+                     <div className="text-xs text-gray-500">Downloads PDF, then opens Gmail. Attach manually.</div>
                    </div>
                  </div>
                  <div className="text-gray-400 group-hover:text-brandOrange">→</div>
@@ -1004,14 +1119,14 @@ function App() {
 
               {/* Option 2: Native Share (Mobile) */}
               {navigator.share && (
-                <button onClick={handleNativeShare} className="w-full flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-brandOrange hover:bg-orange-50 transition-all group">
+                <button disabled={isGeneratingPdf} onClick={handleNativeShare} className="w-full flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-brandOrange hover:bg-orange-50 transition-all group disabled:opacity-50">
                    <div className="flex items-center gap-3">
                      <div className="bg-purple-100 text-purple-600 p-2 rounded-full group-hover:bg-brandOrange group-hover:text-white transition-colors">
-                       <Share2 size={20} />
+                       {isGeneratingPdf ? <Loader2 className="animate-spin" size={20} /> : <Share2 size={20} />}
                      </div>
                      <div className="text-left">
-                       <div className="font-bold text-navy">Share...</div>
-                       <div className="text-xs text-gray-500">WhatsApp, Messages, etc.</div>
+                       <div className="font-bold text-navy">Share PDF (WhatsApp / Email)</div>
+                       <div className="text-xs text-gray-500">Generates and attaches the full PDF quote with photos.</div>
                      </div>
                    </div>
                    <div className="text-gray-400 group-hover:text-brandOrange">→</div>
