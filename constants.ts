@@ -100,7 +100,7 @@ export const LABOUR_RATES = {
   twoDays: 2800,
   fiveDays: 7000,
   hourly: 175,
-  minJob: 400,
+  minJob: 350,
   adminFee: 90,
   siteInspection: 150,
   wallScanning: 150,

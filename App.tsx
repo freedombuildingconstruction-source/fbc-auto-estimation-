@@ -117,26 +117,20 @@ function App() {
         useCORS: true 
       });
       const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
       
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      const pdfWidth = 210; // A4 width in mm
+      const contentHeight = (canvas.height * pdfWidth) / canvas.width;
+      const marginY = 25; // 25mm margin top and bottom
+      const pdfHeight = contentHeight + (marginY * 2);
       
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      // Add first page
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-
-      // Add subsequent pages if content overflows
-      while (heightLeft > 0) {
-        position -= pageHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
+      // Create PDF with custom page size to fit content exactly on one page with margins
+      const pdf = new jsPDF({
+        orientation: pdfHeight > pdfWidth ? 'p' : 'l',
+        unit: 'mm',
+        format: [pdfWidth, pdfHeight]
+      });
+      
+      pdf.addImage(imgData, 'PNG', 0, marginY, pdfWidth, contentHeight);
       
       return pdf.output('blob');
     } catch (error) {
@@ -546,8 +540,8 @@ function App() {
       categoryId: 'major-bath',
       description: t('stdPackage'),
       descriptionZh: TRANSLATIONS['stdPackage'].zh,
-      details: t('stdPackageDesc') + ` [${majorBathForm.len}x${majorBathForm.width}x${majorBathForm.height}mm]`,
-      detailsZh: TRANSLATIONS['stdPackageDesc'].zh + ` [${majorBathForm.len}x${majorBathForm.width}x${majorBathForm.height}毫米]`,
+      details: t('stdPackageDesc') + ` [${majorBathForm.len}x${majorBathForm.width}x${majorBathForm.height}mm] - Based on basic 5sqm bathroom`,
+      detailsZh: TRANSLATIONS['stdPackageDesc'].zh + ` [${majorBathForm.len}x${majorBathForm.width}x${majorBathForm.height}毫米] - 基於5平方米基礎浴室`,
       quantity: 1,
       unitPriceEx: stdRate,
       totalPriceInc: stdRateInc
@@ -576,32 +570,60 @@ function App() {
     }
     setFormErrors({});
     
-    let labourCost = 0;
+    // Logic: Pure hourly rate with Minimum Job Charge floor
     const duration = parseFloat(maintForm.duration); 
-    
-    if (duration <= 2) labourCost = duration * LABOUR_RATES.hourly; 
-    else labourCost = LABOUR_RATES.oneDay;
+    let labourCost = duration * LABOUR_RATES.hourly;
 
-    // Min job rate
-    if (labourCost < LABOUR_RATES.minJob) labourCost = LABOUR_RATES.minJob;
+    // Apply Minimum Job Charge rule ($350)
+    if (labourCost < LABOUR_RATES.minJob) {
+        labourCost = LABOUR_RATES.minJob;
+    }
 
     // Fees
-    const admin = LABOUR_RATES.adminFee;
-    const inspect = maintForm.inspection ? LABOUR_RATES.siteInspection : 0;
-    const totalEx = labourCost + admin + inspect;
-    const totalInc = totalEx * (1 + GST_RATE);
+    const adminCost = LABOUR_RATES.adminFee;
+    const inspectionCost = maintForm.inspection ? LABOUR_RATES.siteInspection : 0;
+    
+    const baseId = Date.now().toString();
+    const newItems: LineItem[] = [];
 
-    addItem({
-      id: Date.now().toString(),
+    // 1. Labour Item (Explicitly mentioning 2 Man Team)
+    newItems.push({
+      id: `${baseId}-labour`,
       categoryId: 'maintenance',
-      description: 'Maintenance Labour & Fees',
-      descriptionZh: '維修人工及費用',
+      description: 'Maintenance Labour - 2 Man Team (Min 2 Hours)',
+      descriptionZh: '維修人工 - 雙人團隊 (最低2小時)',
       details: `${maintForm.desc} (${maintForm.duration} hrs est.)`,
       detailsZh: `${maintForm.desc} (預計 ${maintForm.duration} 小時)`,
       quantity: 1,
-      unitPriceEx: totalEx,
-      totalPriceInc: totalInc
+      unitPriceEx: labourCost,
+      totalPriceInc: labourCost * (1 + GST_RATE)
     });
+
+    // 2. Admin/Overhead Item
+    newItems.push({
+      id: `${baseId}-admin`,
+      categoryId: 'maintenance',
+      description: 'Admin / Overhead Fee',
+      descriptionZh: '行政/管理費用',
+      quantity: 1,
+      unitPriceEx: adminCost,
+      totalPriceInc: adminCost * (1 + GST_RATE)
+    });
+
+    // 3. Site Inspection (if checked)
+    if (maintForm.inspection) {
+      newItems.push({
+        id: `${baseId}-inspect`,
+        categoryId: 'maintenance',
+        description: 'Site Inspection Fee',
+        descriptionZh: '現場檢查費',
+        quantity: 1,
+        unitPriceEx: inspectionCost,
+        totalPriceInc: inspectionCost * (1 + GST_RATE)
+      });
+    }
+
+    setItems(prev => [...prev, ...newItems]);
   };
 
   // --- Render Sections ---
@@ -611,9 +633,24 @@ function App() {
       case 'minor-bath':
         return (
           <div className="space-y-4 animate-fadeIn">
-            <DarkSelect label={t('selectMod')} value={minorBathForm.type} onChange={e => setMinorBathForm({...minorBathForm, type: e.target.value})}>
-              {MINOR_BATH_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label} (${o.priceEx} ex)</option>)}
-            </DarkSelect>
+            <div className="relative group">
+                <DarkSelect 
+                    label={t('selectMod')} 
+                    value={minorBathForm.type} 
+                    onChange={e => setMinorBathForm({...minorBathForm, type: e.target.value})}
+                    title={minorBathForm.type === 'wall-scanning-fee' ? "* Compulsory for bathroom/toilet works" : undefined}
+                >
+                  {MINOR_BATH_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label} (${o.priceEx} ex)</option>)}
+                </DarkSelect>
+                {/* Tooltip for wall scanning */}
+                {minorBathForm.type === 'wall-scanning-fee' && (
+                  <div className="absolute z-10 bottom-full left-0 mb-1 hidden group-hover:block group-focus-within:block bg-navy border border-brandOrange text-brandOrange text-xs px-3 py-2 rounded shadow-xl whitespace-nowrap pointer-events-none">
+                    * Compulsory for bathroom/toilet works
+                    {/* Little triangle arrow */}
+                    <div className="absolute top-full left-4 -mt-[1px] border-4 border-transparent border-t-brandOrange"></div>
+                  </div>
+                )}
+            </div>
             <DarkInput type="number" label={t('qty')} value={minorBathForm.qty} onChange={e => setMinorBathForm({...minorBathForm, qty: parseInt(e.target.value) || 1})} min={1} />
             <OrangeButton className="w-full mt-4" onClick={addMinorBath}><Plus size={18} /> {t('addItem')}</OrangeButton>
           </div>
@@ -760,6 +797,7 @@ function App() {
         };
         return (
           <div className="space-y-4 animate-fadeIn">
+            <p className="text-xs text-brandOrange italic mb-2">* Estimate based on a basic 5 sqm bathroom</p>
             <div className="grid grid-cols-3 gap-2">
               <DarkInput 
                 type="number" 
@@ -827,14 +865,21 @@ function App() {
                 error={formErrors.desc}
               />
             </div>
-            <DarkSelect label={t('estDuration')} value={maintForm.duration} onChange={e => setMaintForm({...maintForm, duration: e.target.value})}>
-              <option value="0.5">0.5 Hours</option>
-              <option value="1">1 Hour</option>
-              <option value="2">2 Hours</option>
-              <option value="4">0.5 Days (4 hrs)</option>
-              <option value="8">1 Day (8 hrs)</option>
-              <option value="16">2 Days</option>
-            </DarkSelect>
+            <div className="w-full">
+                <DarkSelect label={t('estDuration')} value={maintForm.duration} onChange={e => setMaintForm({...maintForm, duration: e.target.value})}>
+                  <option value="0.5">0.5 Hours</option>
+                  <option value="1">1 Hour</option>
+                  <option value="2">2 Hours</option>
+                  <option value="3">3 Hours</option>
+                  <option value="4">0.5 Days (4 hrs)</option>
+                  <option value="5">5 Hours</option>
+                  <option value="6">6 Hours</option>
+                  <option value="7">7 Hours</option>
+                  <option value="8">1 Day (8 hrs)</option>
+                  <option value="16">2 Days</option>
+                </DarkSelect>
+                <p className="text-xs text-brandOrange italic mt-1">Minimum 2 hours charge applies ($350 ex GST)</p>
+            </div>
             <CheckboxGroup label={t('siteInspection')} checked={maintForm.inspection} onChange={c => setMaintForm({...maintForm, inspection: c})} />
             <OrangeButton className="w-full mt-4" onClick={addMaintenance}><Plus size={18} /> {t('addItem')}</OrangeButton>
           </div>
@@ -860,14 +905,16 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 font-sans text-gray-800 relative">
       {/* Header */}
-      <header className="bg-navy text-white p-4 shadow-lg sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
+      <header className="bg-navy text-white shadow-lg sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex flex-col">
             <h1 className="text-xl font-bold flex items-center gap-3">
               <FBCLogo />
-              <span className="flex flex-col leading-tight">
-                <span className="text-xl tracking-tight text-white">FBC <span className="text-brandOrange">Estimator</span></span>
-              </span>
+              <div className="flex flex-col">
+                 <span className="flex flex-col leading-tight">
+                    <span className="text-xl tracking-tight text-white">FBC <span className="text-brandOrange">Estimator</span></span>
+                 </span>
+              </div>
             </h1>
           </div>
           <div className="flex items-center gap-4">
@@ -878,9 +925,16 @@ function App() {
             <div className="text-xs text-gray-400 font-mono hidden md:block">{REF_NUMBER}</div>
           </div>
         </div>
+        
+        {/* New Tagline Bar */}
+        <div className="bg-navyLight/50 backdrop-blur-sm border-t border-gray-700/50 py-2 px-4 text-center">
+          <p className="text-base md:text-xl text-gray-200">
+            Stop guessing. Get instant clarity on home modification costs and <span className="text-brandOrange font-bold">lock in the client's budget.</span>
+          </p>
+        </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-0">
+      <main className="max-w-7xl mx-auto p-2 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-0">
         
         {/* Left Column: Controls (45%) */}
         <div className="lg:col-span-5 space-y-6">
@@ -968,7 +1022,7 @@ function App() {
           </div>
           
           {/* The Actual Quote Paper */}
-          <div id="quote-summary" className="bg-white p-8 rounded shadow-lg min-h-[600px] text-sm relative">
+          <div id="quote-summary" className="bg-white p-4 md:p-8 rounded shadow-lg min-h-[600px] text-sm relative">
             
             {/* PDF Header */}
             <div className="flex justify-between items-start mb-8 border-b pb-6">
