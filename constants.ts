@@ -66,6 +66,7 @@ export const TRANSLATIONS: Dictionary = {
 };
 
 export const MINOR_BATH_OPTIONS: PricingItem[] = [
+  { id: 'wall-scanning-fee', label: 'Wall Scanning Fee', priceEx: 150 },
   { id: 'grab-300', label: 'Grab Rail (300-450mm)', priceEx: 350 },
   { id: 'grab-600', label: 'Grab Rail (600-900mm)', priceEx: 380 },
   { id: 'grab-custom', label: 'Custom Grab Rail (L-Type/T-Type)', priceEx: 700 },

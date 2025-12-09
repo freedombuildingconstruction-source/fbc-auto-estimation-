@@ -74,7 +74,7 @@ function App() {
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
 
   // Local Form States
-  const [minorBathForm, setMinorBathForm] = useState({ type: MINOR_BATH_OPTIONS[0].id, qty: 1, scanning: false });
+  const [minorBathForm, setMinorBathForm] = useState({ type: MINOR_BATH_OPTIONS[0].id, qty: 1 });
   const [handrailForm, setHandrailForm] = useState({ type: 'wall', location: 'indoor', len: '', qty: 1 });
   const [rampForm, setRampForm] = useState({ type: 'merbau', len: '', ground: 'concrete', photos: [] as string[] });
   const [rampRailForm, setRampRailForm] = useState({ len: '', sides: 'one' });
@@ -118,10 +118,26 @@ function App() {
       });
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      const imgWidth = 210; // A4 width in mm
+      const pageHeight = 297; // A4 height in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      // Add first page
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      // Add subsequent pages if content overflows
+      while (heightLeft > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+      
       return pdf.output('blob');
     } catch (error) {
       console.error("PDF generation failed", error);
@@ -174,7 +190,7 @@ function App() {
     
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       try {
-        const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
+        const files = (Array.from(e.dataTransfer.files) as File[]).filter(file => file.type.startsWith('image/'));
         if (files.length === 0) {
             setUploadFeedback("No image files detected.");
             setTimeout(() => setUploadFeedback(null), 3000);
@@ -196,7 +212,7 @@ function App() {
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       try {
-        const files = Array.from(e.target.files).filter(file => file.type.startsWith('image/'));
+        const files = (Array.from(e.target.files) as File[]).filter(file => file.type.startsWith('image/'));
         const newPhotos = await Promise.all(files.map(fileToBase64));
         
         setRampForm(prev => ({ ...prev, photos: [...prev.photos, ...newPhotos] }));
@@ -365,7 +381,7 @@ function App() {
     const opt = MINOR_BATH_OPTIONS.find(o => o.id === minorBathForm.type);
     if (!opt) return;
     
-    // Calculate Main Item Price (Scanning fee is separate now)
+    // Calculate Main Item Price
     const baseTotalEx = opt.priceEx * minorBathForm.qty;
     const totalInc = baseTotalEx * (1 + GST_RATE);
 
@@ -382,26 +398,6 @@ function App() {
       totalPriceInc: totalInc
     });
 
-    // 2. Add Scanning Fee if checked and NOT already in list
-    if (minorBathForm.scanning) {
-        const scanningFeeId = 'wall-scanning-fee';
-        const feeExists = items.some(i => i.id === scanningFeeId);
-
-        if (!feeExists) {
-            const feeEx = LABOUR_RATES.wallScanning;
-            const feeInc = feeEx * (1 + GST_RATE);
-            newItems.push({
-                id: scanningFeeId,
-                categoryId: 'minor-bath',
-                description: 'Wall Scanning Fee',
-                descriptionZh: '牆壁掃描費',
-                quantity: 1,
-                unitPriceEx: feeEx,
-                totalPriceInc: feeInc
-            });
-        }
-    }
-
     setItems(prev => [...prev, ...newItems]);
   };
 
@@ -414,17 +410,19 @@ function App() {
     }
     setFormErrors({});
 
-    let rate = 370; // Wall default
-    let minLen = 0.5;
+    let rate = 370; // Wall default (per meter)
+    let minLenM = 0.5; // 0.5m = 500mm
     
     if (handrailForm.type === 'stair') {
       rate = 500;
-      minLen = 0.8;
+      minLenM = 0.8; // 0.8m = 800mm
     }
 
-    const effectiveLen = Math.max(len, minLen);
+    // Convert input (mm) to meters
+    const lenM = len / 1000;
+    const effectiveLenM = Math.max(lenM, minLenM);
     
-    const priceEx = effectiveLen * rate;
+    const priceEx = effectiveLenM * rate;
     const totalEx = priceEx * handrailForm.qty;
     const totalInc = totalEx * (1 + GST_RATE);
 
@@ -438,8 +436,8 @@ function App() {
       categoryId: 'handrail',
       description: `SS Handrail (${typeLabel}, ${locLabel})`,
       descriptionZh: `不鏽鋼扶手 (${typeLabelZh}, ${locLabelZh})`,
-      details: `Length: ${len}m`,
-      detailsZh: `長度: ${len}米`,
+      details: `Length: ${len}mm (${lenM.toFixed(2)}m)`,
+      detailsZh: `長度: ${len}毫米 (${lenM.toFixed(2)}米)`,
       quantity: handrailForm.qty,
       unitPriceEx: priceEx, 
       totalPriceInc: totalInc
@@ -456,7 +454,9 @@ function App() {
     setFormErrors({});
 
     const width = 1.3;
-    const area = len * width;
+    // Convert mm to m for area calculation
+    const lenM = len / 1000;
+    const area = lenM * width;
     const rate = rampForm.type === 'merbau' ? 792 : 921;
     let totalEx = area * rate;
     
@@ -475,8 +475,8 @@ function App() {
       categoryId: 'ramp',
       description: `Access Ramp - ${typeLabel}`,
       descriptionZh: `無障礙斜坡 - ${typeLabelZh}`,
-      details: `Length: ${len}m (${area.toFixed(2)}m²), Ground: ${groundLabel}`,
-      detailsZh: `長度: ${len}米 (${area.toFixed(2)}平方米), 地面: ${groundLabelZh}`,
+      details: `Length: ${len}mm (${area.toFixed(2)}m²), Ground: ${groundLabel}`,
+      detailsZh: `長度: ${len}毫米 (${area.toFixed(2)}平方米), 地面: ${groundLabelZh}`,
       quantity: 1,
       unitPriceEx: totalEx,
       totalPriceInc: totalInc,
@@ -496,15 +496,16 @@ function App() {
     }
 
     // Requirement: only apply for length over 5000mm (5m)
-    if (len <= 5) {
+    if (len <= 5000) {
       alert("Ramp rails are only applicable for lengths greater than 5000mm (5m).");
       return;
     }
     setFormErrors({});
 
+    const lenM = len / 1000;
     const rate = 350;
     const multiplier = rampRailForm.sides === 'both' ? 2 : 1;
-    const totalEx = len * rate * multiplier;
+    const totalEx = lenM * rate * multiplier;
     const totalInc = totalEx * (1 + GST_RATE);
 
     const sideLabel = rampRailForm.sides === 'both' ? 'Both sides' : 'One side';
@@ -515,8 +516,8 @@ function App() {
       categoryId: 'ramp-rails',
       description: 'Aluminium handrail with kerb rail',
       descriptionZh: '帶路緣導軌的鋁製扶手',
-      details: `Length: ${len}m, ${sideLabel}`,
-      detailsZh: `長度: ${len}米, ${sideLabelZh}`,
+      details: `Length: ${len}mm (${lenM.toFixed(2)}m), ${sideLabel}`,
+      detailsZh: `長度: ${len}毫米 (${lenM.toFixed(2)}米), ${sideLabelZh}`,
       quantity: 1,
       unitPriceEx: totalEx,
       totalPriceInc: totalInc
@@ -614,7 +615,6 @@ function App() {
               {MINOR_BATH_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label} (${o.priceEx} ex)</option>)}
             </DarkSelect>
             <DarkInput type="number" label={t('qty')} value={minorBathForm.qty} onChange={e => setMinorBathForm({...minorBathForm, qty: parseInt(e.target.value) || 1})} min={1} />
-            <CheckboxGroup label={t('wallScanning')} checked={minorBathForm.scanning} onChange={c => setMinorBathForm({...minorBathForm, scanning: c})} />
             <OrangeButton className="w-full mt-4" onClick={addMinorBath}><Plus size={18} /> {t('addItem')}</OrangeButton>
           </div>
         );
@@ -631,7 +631,7 @@ function App() {
             </DarkSelect>
             <DarkInput 
                 type="number" 
-                label={t('lengthM')} 
+                label={t('lengthMm')} 
                 value={handrailForm.len} 
                 onChange={e => {
                     setHandrailForm({...handrailForm, len: e.target.value});
@@ -652,7 +652,7 @@ function App() {
             </DarkSelect>
             <DarkInput 
                 type="number" 
-                label={t('lengthM')} 
+                label={t('lengthMm')} 
                 value={rampForm.len} 
                 onChange={e => {
                     setRampForm({...rampForm, len: e.target.value});
@@ -733,7 +733,7 @@ function App() {
            <div className="space-y-4 animate-fadeIn">
             <DarkInput 
                 type="number" 
-                label={t('lengthM')} 
+                label={t('lengthMm')} 
                 value={rampRailForm.len} 
                 onChange={e => {
                     setRampRailForm({...rampRailForm, len: e.target.value});
@@ -976,7 +976,7 @@ function App() {
                 <h1 className="text-2xl font-bold text-navy tracking-wide">{t('companyName')}</h1>
                 <div className="text-gray-600 text-xs space-y-1 mt-2">
                    <p className="font-bold text-navy mb-2">Lic No: 270939C | ABN: 33 160 818 502</p>
-                   <p><span className="font-bold">{t('contact')}:</span> Dickson Lam</p>
+                   <p><span className="font-bold">{t('contact')}:</span> Dickson Lam | 0404 892 468</p>
                    <p>Sydney, NSW</p>
                    <p>freedombuildingconstruction@gmail.com</p>
                 </div>
