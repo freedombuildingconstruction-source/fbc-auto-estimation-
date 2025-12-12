@@ -866,7 +866,6 @@ function App() {
             </div>
             <div className="w-full">
                 <DarkSelect label={t('estDuration')} value={maintForm.duration} onChange={e => setMaintForm({...maintForm, duration: e.target.value})}>
-                  <option value="0.5">0.5 Hours</option>
                   <option value="1">1 Hour</option>
                   <option value="2">2 Hours</option>
                   <option value="3">3 Hours</option>
