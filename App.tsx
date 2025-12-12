@@ -580,18 +580,26 @@ function App() {
     }
 
     // Fees
-    const adminCost = LABOUR_RATES.adminFee;
     const inspectionCost = maintForm.inspection ? LABOUR_RATES.siteInspection : 0;
     
     const baseId = Date.now().toString();
     const newItems: LineItem[] = [];
 
+    // Description Logic based on duration
+    let descEn = 'Maintenance Labour - 2 Man Team (Min 2 Hours)';
+    let descZh = '維修人工 - 雙人團隊 (最低2小時)';
+    
+    if (duration > 1) {
+        descEn = 'Maintenance Labour - 2 Man Team';
+        descZh = '維修人工 - 雙人團隊';
+    }
+
     // 1. Labour Item (Explicitly mentioning 2 Man Team)
     newItems.push({
       id: `${baseId}-labour`,
       categoryId: 'maintenance',
-      description: 'Maintenance Labour - 2 Man Team (Min 2 Hours)',
-      descriptionZh: '維修人工 - 雙人團隊 (最低2小時)',
+      description: descEn,
+      descriptionZh: descZh,
       details: `${maintForm.desc} (${maintForm.duration} hrs est.)`,
       detailsZh: `${maintForm.desc} (預計 ${maintForm.duration} 小時)`,
       quantity: 1,
@@ -599,16 +607,7 @@ function App() {
       totalPriceInc: labourCost * (1 + GST_RATE)
     });
 
-    // 2. Admin/Overhead Item
-    newItems.push({
-      id: `${baseId}-admin`,
-      categoryId: 'maintenance',
-      description: 'Admin / Overhead Fee',
-      descriptionZh: '行政/管理費用',
-      quantity: 1,
-      unitPriceEx: adminCost,
-      totalPriceInc: adminCost * (1 + GST_RATE)
-    });
+    // Admin/Overhead Item removed (waived)
 
     // 3. Site Inspection (if checked)
     if (maintForm.inspection) {
@@ -871,7 +870,7 @@ function App() {
                   <option value="1">1 Hour</option>
                   <option value="2">2 Hours</option>
                   <option value="3">3 Hours</option>
-                  <option value="4">0.5 Days (4 hrs)</option>
+                  <option value="4">4 Hours</option>
                   <option value="5">5 Hours</option>
                   <option value="6">6 Hours</option>
                   <option value="7">7 Hours</option>
